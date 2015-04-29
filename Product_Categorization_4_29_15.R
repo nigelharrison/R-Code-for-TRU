@@ -107,19 +107,69 @@ dtm.corp.sparseM <- sparseMatrix(i=dtm.corp$i, j=dtm.corp$j,x=dtm.corp$v)
 # find terms that occur frequently (specify number of docs)
 findFreqTerms(dtm.corp,100)
 
+
+
+
+
 ################## Prepare for Classification ###########################################
 
 # dtm.corp.df <- as.data.frame(inspect(dtm.corp)) Doesn't work as data frame too large
 
 dtm.corp.df <- removeSparseTerms(dtm.corp,0.9999)
 
+
+# converts dtm to data frame 
 dtm.corp.df <- as.data.frame(inspect(dtm.corp.df))
 
-library(e1071)
+library(e1071) #ML library including svm and randomForest. works on sparse matrices
+
+
+
+
+
+
+
+
 
 #################### Fitting Support Vector Machine (SVM) to Sparse Data Matix  ########
 
-svm.sparse.sample <- svm(dtm.corp.sparseM,product_data_clean.sample$Tier1,kernel = "linear")
+# Fits svm including calculating accuracy using 5 fold cross validation
+svm.sparse.sample <- svm(dtm.corp.sparseM,product_data_clean.sample$Tier1,kernel = "linear",cross = 5)
+
+# gives summary of model
+summary(svm.sparse.sample)
+
+# predict results on training set
+svm.predict.sparse.sample <- predict(svm.sparse.sample,dtm.corp.sparseM)
+
+# put prediction and results in single data frame
+results <- as.data.frame(cbind(svm.predict.sparse.sample,product_data_clean.sample$Tier1))
+colnames(results) <- c("Predicted","Actual")
+
+# compare results
+table(results$Predicted==results$Actual)
+
+set.seed(1)
+
+# tuning svm with 5 fold cross validation varying epsilon and cost
+# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, ranges = list(epsilson = c(0.01,0.1,1),cost = 2^(-3:3)), probability=T, tunecontrol = tune.control(sampling = "cross", cross=5))
+# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, ranges = list(epsilson = c(0.01,0.1,1)), probability=T, tunecontrol = tune.control(sampling = "cross", cross=5))
+# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, tunecontrol = tune.control(sampling = "cross", cross=2))
+# above tuning resulted in error "Error in tab[lev, lev] : subscript out of bounds"
+
+################## taking rows out of matrix and class vectors with no words in matrix ###########
+x <- rowSums(dtm.corp.sparseM)
+x <- x!=0
+dtm.corp.sparseM.clean <- dtm.corp.sparseM[x==TRUE,]
+tier1.actuals.clean <- product_data_clean.sample$Tier1[x==TRUE]
+
+tune.out=tune(svm ,dtm.corp.sparseM,product_data_clean.sample$Tier1,kernel ="linear",ranges =list(cost=c(0.001 , 0.01) ),tunecontrol = tune.control(sampling = "cross", cross=2))
+
+
+
+
+
+
 
 
 
