@@ -68,16 +68,10 @@ product_data_clean <- droplevels(product_data_clean)
 
 
 
-
-
-################### Taking Sample of data  ##########################
-
-product_data_clean.sample <- product_data_clean[sample(nrow(product_data_clean),10000),]
-
 #################### Creation and Preprossessing of entire corpus ##################################
 
 ### creating single text corpus
-corp <- Corpus(VectorSource(product_data_clean.sample[,17]))
+corp <- Corpus(VectorSource(product_data_clean[,17]))
 
 ### Removing Punctuation
 corp.pp <- tm_map(corp,removePunctuation)
@@ -92,7 +86,7 @@ corp.pp <- tm_map(corp.pp,removeNumbers)
 #################### Creation of document term matrix ##################################
 
 #### Create dtm matrix with tfidf applied
-dtm.corp <- DocumentTermMatrix(corp.pp,control=list(weighting=weightTfIdf, minWordLength=2, minDocFreq=20,stopwords=TRUE))
+dtm.corp <- DocumentTermMatrix(corp.pp,control=list(weighting=weightTfIdf, minWordLength=2, minDocFreq=40,stopwords=TRUE))
 
 
 ################### Convert to Sparse Matrix  ####################################
@@ -113,6 +107,146 @@ findFreqTerms(dtm.corp,100)
 
 ################## Prepare for Classification ###########################################
 
+library(e1071) #ML library including svm and randomForest. works on sparse matrices
+
+################## taking rows out of matrix and class vectors with no words in matrix ###########
+x <- rowSums(dtm.corp.sparseM)
+x <- x!=0
+dtm.corp.sparseM.clean <- dtm.corp.sparseM[x==TRUE,]
+tier1.actuals.clean <- product_data_clean$Tier1[x==TRUE]
+
+
+############### removing entries with no tier 1
+x <- tier1.actuals.clean!=""
+
+dtm.corp.sparseM.clean <- dtm.corp.sparseM.clean[x==TRUE,]
+tier1.actuals.clean <- tier1.actuals.clean[x==TRUE]
+
+################### Taking Sample of data  ##########################
+
+
+set.seed(44)
+# select rows to sample
+sample.rows <- sample(nrow(dtm.corp.sparseM.clean),10000)
+#subset into sample and test sets
+product_data_clean.sample <- dtm.corp.sparseM.clean[sample.rows,]
+product_data_clean.test <- dtm.corp.sparseM.clean[-sample.rows,]
+# subset classification into sample and test
+tier1.actuals.clean.sample <- tier1.actuals.clean[sample.rows]
+tier1.actuals.clean.test <- tier1.actuals.clean[-sample.rows]
+
+#################### Fitting Support Vector Machine (SVM) to Sparse Data Matix  ########
+
+#### Performing some simple tuning on cost factor
+# Fits svm including calculating accuracy using 5 fold cross validation for different levels of cost
+svm.sparse.sample.1.0 <- svm(product_data_clean.sample,tier1.actuals.clean.sample,kernel = "linear",cross = 5,cost=1,probability=T)
+svm.sparse.sample.0.1 <- svm(product_data_clean.sample,tier1.actuals.clean.sample,kernel = "linear",cross = 5,cost=0.1,probability=T)
+svm.sparse.sample.10  <- svm(product_data_clean.sample,tier1.actuals.clean.sample,kernel = "linear",cross = 5,cost=10,probability=T)
+
+# gives summary of model
+summary(svm.sparse.sample.1.0)
+
+# capture output into text file
+x<-summary(svm.sparse.sample.1.0)
+capture.output(x,file = "svm.sparse.sample.1.0.txt")
+x<-summary(svm.sparse.sample.0.1)
+capture.output(x,file = "svm.sparse.sample.0.1.txt")
+x<-summary(svm.sparse.sample.10)
+capture.output(x,file = "svm.sparse.sample.10.txt")
+
+# Cost of 1 had highest accuracy (72.6%, compared to 71.7% for cost of 10. 
+# Cost of 0.1 had far lower performance - 49.6%
+
+# fit the final svm model
+svm.sparse.sample <- svm(product_data_clean.sample,tier1.actuals.clean.sample,kernel = "linear",cross = 5,cost=1,probability=T)
+
+
+# predict results on test set
+svm.predict.sparse.test <- predict(svm.sparse.sample,product_data_clean.test)
+
+# put prediction and results in single data frame
+results <- as.data.frame(cbind(svm.predict.sparse.test,tier1.actuals.clean.test))
+colnames(results) <- c("Predicted","Actual")
+
+# compare results
+table(results$Predicted==results$Actual)
+
+#### Accuracy of 0.7580736 on test set ####
+
+
+######################## Naive Bayes ##################################
+
+#### Changing Sparse Matrix to data frame 
+
+# dtm.corp.df <- as.data.frame(inspect(dtm.corp)) Doesn't work as data frame too large
+
+##### create training data  ######
+
+###### NOTE I HAVE NOT YET REMOVED BLANK ROWS OR ROWS WITH "" CLASS FROM DATA ####
+
+set.seed(45)
+# select rows to sample
+sample.rows <- sample(nrow(dtm.corp),10000)
+# sample original document term matrix
+dtm.corp.nb.sample <- dtm.corp[sample.rows,]
+# coerce dtm into a data frame
+dtm.corp.nb.sample <- as.data.frame(inspect(dtm.corp.nb.sample))
+# create matching sample of class
+tier1.actuals.nb.sample <-product_data_clean$Tier1[sample.rows]
+
+
+#### create test data
+
+dtm.corp.nb.test <- dtm.corp[-sample.rows,]
+tier1.actuals.nb.test <- product_data_clean$Tier1[-sample.rows]
+
+# select rows to sample because entire test set too large to coerce to data frame
+set.seed(46)
+sample.rows.test <- sample(nrow(dtm.corp.nb.test),5000)
+# subset to sample
+dtm.corp.nb.test.s <- dtm.corp.nb.test[sample.rows.test,]
+# coerce dtm into a data frame
+df.corp.nb.test.s <- as.data.frame(inspect(dtm.corp.nb.test.s))
+# create matching sample of class
+tier1.actuals.nb.test.s <- tier1.actuals.nb.test[sample.rows.test]
+
+
+
+
+##### train naive bayes model
+nb.sparse.sample <- naiveBayes(dtm.corp.nb.sample,tier1.actuals.nb.sample)
+
+
+
+#predict results on test set
+nb.predict.test <- predict(nb.sparse.sample,df.corp.nb.test.s)
+
+save.image()
+
+#put prediction and results in single data frame
+results <- as.data.frame(cbind(nb.predict.test,tier1.actuals.nb.test.s))
+
+colnames(results) <- c("Predicted","Actual")
+
+# compare results
+table(results$Predicted==results$Actual)
+
+
+#################### Old Code ######################################################
+
+################### Attempt to tune using tune function resulted in errors - possibly due to sparse matrix ######
+
+# tuning svm with 5 fold cross validation varying epsilon and cost
+# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, ranges = list(epsilson = c(0.01,0.1,1),cost = 2^(-3:3)), probability=T, tunecontrol = tune.control(sampling = "cross", cross=5))
+# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, ranges = list(epsilson = c(0.01,0.1,1)), probability=T, tunecontrol = tune.control(sampling = "cross", cross=5))
+# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, tunecontrol = tune.control(sampling = "cross", cross=2))
+# tune.out=tune(svm ,dtm.corp.sparseM.clean,tier1.actuals.clean,kernel ="linear",ranges =list(cost=c(0.001 , 0.01) ),tunecontrol = tune.control(sampling = "cross", cross=2))
+# above tuning resulted in error "Error in tab[lev, lev] : subscript out of bounds". 
+# Tried multiple different settings and removed any 0 rows and "" labled tiers from data. still didn't work
+
+
+#### Changing Sparse Matrix to data frame 
+
 # dtm.corp.df <- as.data.frame(inspect(dtm.corp)) Doesn't work as data frame too large
 
 dtm.corp.df <- removeSparseTerms(dtm.corp,0.9999)
@@ -121,59 +255,6 @@ dtm.corp.df <- removeSparseTerms(dtm.corp,0.9999)
 # converts dtm to data frame 
 dtm.corp.df <- as.data.frame(inspect(dtm.corp.df))
 
-library(e1071) #ML library including svm and randomForest. works on sparse matrices
-
-
-
-
-
-
-
-
-
-#################### Fitting Support Vector Machine (SVM) to Sparse Data Matix  ########
-
-# Fits svm including calculating accuracy using 5 fold cross validation
-svm.sparse.sample <- svm(dtm.corp.sparseM,product_data_clean.sample$Tier1,kernel = "linear",cross = 5)
-
-# gives summary of model
-summary(svm.sparse.sample)
-
-# predict results on training set
-svm.predict.sparse.sample <- predict(svm.sparse.sample,dtm.corp.sparseM)
-
-# put prediction and results in single data frame
-results <- as.data.frame(cbind(svm.predict.sparse.sample,product_data_clean.sample$Tier1))
-colnames(results) <- c("Predicted","Actual")
-
-# compare results
-table(results$Predicted==results$Actual)
-
-set.seed(1)
-
-# tuning svm with 5 fold cross validation varying epsilon and cost
-# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, ranges = list(epsilson = c(0.01,0.1,1),cost = 2^(-3:3)), probability=T, tunecontrol = tune.control(sampling = "cross", cross=5))
-# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, ranges = list(epsilson = c(0.01,0.1,1)), probability=T, tunecontrol = tune.control(sampling = "cross", cross=5))
-# svm.sparse.sample.tune <- tune(svm,dtm.corp.sparseM,product_data_clean.sample$Tier1, tunecontrol = tune.control(sampling = "cross", cross=2))
-# above tuning resulted in error "Error in tab[lev, lev] : subscript out of bounds"
-
-################## taking rows out of matrix and class vectors with no words in matrix ###########
-x <- rowSums(dtm.corp.sparseM)
-x <- x!=0
-dtm.corp.sparseM.clean <- dtm.corp.sparseM[x==TRUE,]
-tier1.actuals.clean <- product_data_clean.sample$Tier1[x==TRUE]
-
-tune.out=tune(svm ,dtm.corp.sparseM,product_data_clean.sample$Tier1,kernel ="linear",ranges =list(cost=c(0.001 , 0.01) ),tunecontrol = tune.control(sampling = "cross", cross=2))
-
-
-
-
-
-
-
-
-
-#################### Old Code ######################################################
 
 
 ### Splits dataframe into different list elements by Tier 1  
